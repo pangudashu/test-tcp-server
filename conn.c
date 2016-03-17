@@ -1,10 +1,15 @@
 #include "conn.h"
 #include "msg.h"
 #include "thread.h"
+#include "util.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <event.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <unistd.h>
 
 int count = 0;
@@ -95,7 +100,7 @@ conn* conn_new(int sfd,enum conn_stat init_stat,size_t read_buf_size,const int e
 		return NULL;
 	}
 
-	c->sfd             = sfd;
+	c->sfd             = sfd;//(*c).
 	c->stat            = init_stat;
 	c->event_flags     = event_flags;
 	c->read_buf_size   = read_buf_size;
@@ -228,13 +233,13 @@ static void drive_machine(conn* c)
 	enum read_buf_res read_res;
 	enum data_unpack_res unpack_res;//解包结果
 
-	struct sockaddr_storage addr;
+	struct sockaddr_in addr;
 	socklen_t addrlen;
 	int client_fd;
 
 	int nreqs = 20;
 
-	//printf("flag : %d\n",c->stat);
+	printf("flag : %d\n",c->stat);
 
 
 	while(!stop)
@@ -309,6 +314,7 @@ static void drive_machine(conn* c)
 			break;
 
 			case conn_parse_cmd:
+                printf("解析:conn_parse_cmd\n");
 #ifdef PROTOCOL_BINARY
 				unpack_res = read_request_header_binary(c);
 
@@ -322,16 +328,14 @@ static void drive_machine(conn* c)
 						//阻塞
 						msg_command_dispatch(c);
 
-						//printf("[read_buf_size befor]%d\n",c->read_buf_ready);
-						c->read_buf_ready = c->read_buf_ready - (PROTOCOL_BINARY_HEADER_LENGTH + c->binary_request.header.body_len);
-						//printf("[read_buf_size after]%d\n",c->read_buf_ready);
-						c->unparsed_buf += PROTOCOL_BINARY_HEADER_LENGTH + c->binary_request.header.body_len; 
-						conn_set_stat(c,conn_write);
-						//conn_set_stat(c,conn_waiting);
+						c->read_buf_ready = c->read_buf_ready - (PROTOCOL_BINARY_HEADER_LENGTH + c->binary_request.header.request.bodylen);
+						c->unparsed_buf += PROTOCOL_BINARY_HEADER_LENGTH + c->binary_request.header.request.bodylen; 
+						//conn_set_stat(c,conn_write);
+						conn_set_stat(c,conn_waiting);
 					break;
 					case DATA_UNPACK_HEADER_OK:
 						printf("header ok !!!\n");
-						printf("===============\nheader:Length:%d Opcode:%d\n==============\n",c->binary_request.header.body_len,c->binary_request.header.opcode);
+						printf("===============\nheader:Length:%d Opcode:%d\n==============\n",c->binary_request.header.request.bodylen,c->binary_request.header.request.opcode);
 						c->read_buf_ready = c->read_buf_ready - PROTOCOL_BINARY_HEADER_LENGTH;
 						c->unparsed_buf += PROTOCOL_BINARY_HEADER_LENGTH; 
 					case DATA_UNPACK_WAIT:
@@ -426,8 +430,14 @@ static enum data_unpack_res read_request_header_binary(conn* c)
 	protocol_binary_request_header* req;
 	req = (protocol_binary_request_header*)c->unparsed_buf;
 
-	int body_len = req->body_len;
-	int opcode   = req->opcode;
+    req->request.keylen = ntohs(req->request.keylen);
+    req->request.bodylen = ntohl(req->request.bodylen);
+    req->request.cas = ntohll(req->request.cas);
+
+	int body_len = req->request.bodylen;
+	int opcode   = req->request.opcode;
+
+    printf("body len:%d opcode:%d\n",body_len,opcode);
 
 	if(opcode >= 9999 || body_len > 1024*1024){
 		//未知命令
@@ -497,9 +507,6 @@ static bool try_to_parse_cmd(conn* c)
 	return true;
 }/*}}}*/
 
-/**
- *协议解析层
- */
 static void command_handler(conn* c,char* command)
 {/*{{{*/
 	uint8_t len[4] = {0};
@@ -611,7 +618,7 @@ static enum read_buf_res try_to_read(conn* c)
 			c->read_buf_ready += read_len;
 
 			read_res = read_data_received;
-			//printf("[----------current----------]%d\n",c->read_buf_ready);
+			printf("[----------current----------]%d\n",c->read_buf_ready);
 
 			if(read_len == buf_avail_size){
 				//未读完，需要扩大buf内存

@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <event2/event.h>
+//#include <event2/event.h>
+#include <event.h>
 #include <signal.h>
 
 THREAD* threads;        //read worder
